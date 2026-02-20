@@ -806,7 +806,8 @@ function buildSim() {
   const wordMap = new Map();
   for (const p of people) {
     const seen = new Set();
-    for (const w of p.words) {
+    for (const raw of p.words) {
+      const w = raw.toLowerCase();
       if (!wordMap.has(w)) wordMap.set(w, { count: 0, owners: new Set() });
       const e = wordMap.get(w);
       if (!seen.has(w)) { e.count++; seen.add(w); }
@@ -836,7 +837,7 @@ function buildSim() {
   // Build person springs (all pairs within each person's word set)
   personSprings = [];
   for (const p of people) {
-    const pNodes = [...new Set(p.words.map(w => wordToNode.get(w)).filter(Boolean))];
+    const pNodes = [...new Set(p.words.map(w => wordToNode.get(w.toLowerCase())).filter(Boolean))];
     for (let a = 0; a < pNodes.length; a++) {
       for (let b = a + 1; b < pNodes.length; b++) {
         const na = pNodes[a], nb = pNodes[b];
