@@ -184,23 +184,24 @@ async function buildEmbeddingLinks(tokens, options = {}) {
 
   if (onProgress) onProgress(0, n);
 
-  // ── 1. Embed all tokens in a single batch call ──
-  const vecs = await embedTokens(tokens);
+  // ── 1. Embed all tokens in one batch ──
+  const model  = await loadEmbeddingModel();
+  const tensor = await model.embed(tokens.map(t => `They describe me as: ${t}.`));
+  const vecs   = await tensor.array();
+  tensor.dispose();
   if (onProgress) onProgress(n, n);
 
-  // ── 2. Precompute full similarity matrix (flat Float32Array) ──
+  // ── 2. Precompute pairwise cosine-similarity matrix ──
   const sim = new Float32Array(n * n);
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const s        = cosineSimilarity(vecs[i], vecs[j]);
+      const s = cosineSimilarity(vecs[i], vecs[j]);
       sim[i * n + j] = s;
       sim[j * n + i] = s;
     }
   }
 
-  // ── 3. Build top-K neighbour sets for every token ──
-  //    Each set contains the indices of that token's K best neighbours
-  //    (above threshold).  Used for the mutual-agreement check.
+  // ── 3. Build top-K neighbour sets ──
   const topKSets = Array.from({ length: n }, () => new Set());
   for (let i = 0; i < n; i++) {
     const nbrs = [];
@@ -213,68 +214,49 @@ async function buildEmbeddingLinks(tokens, options = {}) {
     for (const { j } of nbrs.slice(0, K)) topKSets[i].add(j);
   }
 
-  // ── 4. Emit mutual edges, tracking per-node degree ──
-  //    symmetric=true  → both endpoints must agree (mutual k-NN)
-  //    symmetric=false → either endpoint suffices (union k-NN)
+  // ── 4. Emit attraction edges (mutual top-K + isolated-node fallback) ──
   const seen   = new Set();
   const edges  = [];
-  const degree = new Int32Array(n); // connection count after mutual pass
+  const degree = new Int32Array(n);
 
   for (let i = 0; i < n; i++) {
     for (const j of topKSets[i]) {
-      if (symmetric && !topKSets[j].has(i)) continue; // not mutual — skip
+      if (symmetric && !topKSets[j].has(i)) continue;
       const key = i < j ? `${i}\x00${j}` : `${j}\x00${i}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const s = sim[i * n + j];
       edges.push({
-        source:   tokens[i],
-        target:   tokens[j],
-        weight:   s,
-        distance: baseDistance * (1 - s),
+        source: tokens[i], target: tokens[j],
+        weight: s, distance: baseDistance * (1 - s),
         strength: Math.max(0.05, Math.min(1, s * 2)),
         onesided: false,
       });
-      degree[i]++;
-      degree[j]++;
+      degree[i]++; degree[j]++;
     }
   }
 
-  // ── 5. Isolated-node fallback (symmetric mode only) ──
-  //    Niche words (proper nouns, slang, rare terms) may end up with
-  //    zero mutual connections even though they *do* have a closest
-  //    neighbour.  For each such node we allow up to `fallbackK`
-  //    one-sided edges, penalised by `onesidedPenalty`, so they stay
-  //    anchored without inflating the mutual graph.
+  // Isolated-node fallback (symmetric mode only)
   if (symmetric) {
     for (let i = 0; i < n; i++) {
-      if (degree[i] > 0) continue; // already connected — don't touch
-
-      // Collect candidates: in i's top-K but not mutual
+      if (degree[i] > 0) continue;
       const candidates = [];
-      for (const j of topKSets[i]) {
-        // (if it were mutual, degree[i] would be > 0 already)
-        candidates.push({ j, s: sim[i * n + j] });
-      }
+      for (const j of topKSets[i]) candidates.push({ j, s: sim[i * n + j] });
       candidates.sort((a, b) => b.s - a.s);
-
       let added = 0;
       for (const { j, s } of candidates) {
         if (added >= fallbackK) break;
         const key = i < j ? `${i}\x00${j}` : `${j}\x00${i}`;
-        if (seen.has(key)) continue; // already added (e.g. as j's fallback)
+        if (seen.has(key)) continue;
         seen.add(key);
         const w = s * onesidedPenalty;
         edges.push({
-          source:   tokens[i],
-          target:   tokens[j],
-          weight:   w,
-          distance: baseDistance * (1 - w),
+          source: tokens[i], target: tokens[j],
+          weight: w, distance: baseDistance * (1 - w),
           strength: Math.max(0.05, Math.min(1, w * 2)),
-          onesided: true,  // flagged — physics & render treat it as softer
+          onesided: true,
         });
-        degree[i]++;
-        added++;
+        degree[i]++; added++;
       }
     }
   }

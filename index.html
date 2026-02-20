@@ -422,6 +422,33 @@
       background: #fff;
     }
     .toggle-switch input:disabled + .toggle-track { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── WORD TOOLTIP ───────────────────────────── */
+    #tooltip {
+      position: absolute;
+      background: rgba(9,9,18,0.92);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 0.72rem;
+      color: var(--text);
+      backdrop-filter: blur(8px);
+      pointer-events: none;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 10;
+    }
+    #tooltip.show { opacity: 1; }
+    .tip-label {
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .tip-row { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+    .tip-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   </style>
   <!-- semantic.js: lazy-loads TF.js + USE CDN on first use, no extra <script> tags needed -->
   <script src="semantic.js"></script>
@@ -462,7 +489,10 @@
     </div>
 
     <div class="side-people">
-      <div class="sec-label">People <span id="p-count" style="color:#2c2c44"></span></div>
+      <div style="display:flex; align-items:center; justify-content:space-between">
+        <div class="sec-label">People <span id="p-count" style="color:#2c2c44"></span></div>
+        <button class="btn btn-ghost" id="btn-remove-all">Remove all</button>
+      </div>
       <div id="p-list"><p class="empty-note">No people added yet.</p></div>
     </div>
   </div>
@@ -488,8 +518,8 @@
             <span class="slider-name">Word spacing</span>
             <span class="slider-val" id="val-rep">700</span>
           </div>
-          <input type="range" id="sl-rep" min="1" max="700" step="1" value="700" />
-          <span class="slider-desc">Repulsion force keeping words from overlapping.</span>
+          <input type="range" id="sl-rep" min="1" max="1500" step="1" value="700" />
+          <span class="slider-desc">Strength of the smooth repulsion zone around each word. Higher = stronger push apart.</span>
         </div>
 
         <div class="slider-row">
@@ -515,7 +545,7 @@
             <span class="slider-name">Pull to center</span>
             <span class="slider-val" id="val-grav">0.0002</span>
           </div>
-          <input type="range" id="sl-grav" min="0.0002" max="0.01" step="0.0001" value="0.0002" />
+          <input type="range" id="sl-grav" min="0" max="0.01" step="0.0001" value="0.0002" />
           <span class="slider-desc">Gravity pulling all words toward the canvas center.</span>
         </div>
       </div>
@@ -603,6 +633,7 @@
         </div>
 
 
+
       </div>
 
     </div>
@@ -623,6 +654,7 @@
   <div id="paused-badge">⏸ Paused</div>
   <div id="semantic-badge">Fetching semantic data…</div>
   <div id="hint">Drag words to rearrange · shared words appear white</div>
+  <div id="tooltip"></div>
 </div>
 
 <script>
@@ -673,7 +705,8 @@ let people        = [];
 let nodes         = [];
 let springs       = [];   // always points to the currently-active spring set
 let personSprings = [];   // springs from same-person word pairs
-let semanticSprings = []; // springs from ConceptNet semantic similarity
+let semanticSprings   = []; // springs from ConceptNet semantic similarity
+let semanticConnected = new Set(); // word-pair keys for attraction edges — used for unrelated repulsion
 let obstacleRects = []; // { x, y, w, h } in physics/CSS-pixel coords
 let simMaxCount   = 1;  // max word count from last buildSim(), used by applySizeExponent
 let semanticMode    = false; // true = use semanticSprings
@@ -716,7 +749,11 @@ class Node {
     this.tw           = 0;
   }
 
-  get r()     { return Math.max(this.tw * 0.5, this.fontSize * 0.5) + 10; }
+  // Semi-axes of the word's bounding ellipse (text width vs. cap height)
+  get hw()    { return this.tw * 0.5 + 8; }           // half-width  with horizontal padding
+  get hh()    { return this.fontSize * 0.5 + 4; }     // half-height with vertical padding
+  // Mean radius used for spring rest lengths — smaller than old max() → tighter packing
+  get r()     { return (this.hw + this.hh) * 0.5; }
   get color() { return this.owners.length === 1 ? this.owners[0].color : '#f0f0ff'; }
 }
 
@@ -746,8 +783,8 @@ function applySizeScale() {
     n.tw       = n.baseTw * s;
   }
   // Update rest lengths for both spring sets (sizes may have changed)
-  for (const sp of personSprings)   { sp.rest = Math.max(sp.n1.r + sp.n2.r + 28, 70); }
-  for (const sp of semanticSprings) { sp.rest = Math.max(sp.n1.r + sp.n2.r + 28, 70); }
+  for (const sp of personSprings)   { sp.rest = Math.max(sp.n1.r + sp.n2.r + 10, 55); }
+  for (const sp of semanticSprings) { sp.rest = Math.max(sp.n1.r + sp.n2.r + 10, 55); }
 }
 
 // Recompute base font sizes from raw counts + current SIM params, re-measure, re-scale.
@@ -803,7 +840,9 @@ function buildSim() {
     for (let a = 0; a < pNodes.length; a++) {
       for (let b = a + 1; b < pNodes.length; b++) {
         const na = pNodes[a], nb = pNodes[b];
-        personSprings.push({ n1: na, n2: nb, color: p.color, rest: Math.max(na.r + nb.r + 28, 70) });
+        // unique: either word belongs to only this person → boost spring to keep it grouped
+        const unique = na.owners.length === 1 || nb.owners.length === 1;
+        personSprings.push({ n1: na, n2: nb, color: p.color, rest: Math.max(na.r + nb.r + 10, 55), unique });
       }
     }
   }
@@ -845,17 +884,33 @@ function applyForces() {
       const dx  = b.x - a.x, dy = b.y - a.y;
       const d2  = dx * dx + dy * dy || 1;
       const d   = Math.sqrt(d2);
-      const f   = SIM.repulsion / d2;
       const nx  = dx / d, ny = dy / d;
-      a.fx -= f * nx;  a.fy -= f * ny;
-      b.fx += f * nx;  b.fy += f * ny;
 
-      // Extra push on overlap
-      const minD = a.r + b.r;
-      if (d < minD) {
-        const push = (minD - d) * 2.2;
-        a.fx -= push * nx;  a.fy -= push * ny;
-        b.fx += push * nx;  b.fy += push * ny;
+      // Elliptical repulsion zone — each word's reach in direction (nx,ny) is
+      // its ellipse radius r(θ) = (hw·hh) / √(hh²·nx² + hw²·ny²).
+      // This gives full horizontal clearance based on text width and
+      // vertical clearance based on cap height, smoothly interpolated between.
+      const ra = (a.hw * a.hh) / Math.sqrt(a.hh * a.hh * nx * nx + a.hw * a.hw * ny * ny);
+      const rb = (b.hw * b.hh) / Math.sqrt(b.hh * b.hh * nx * nx + b.hw * b.hw * ny * ny);
+      const cutoff = ra + rb + 10;
+      if (d < cutoff) {
+        const f = SIM.repulsion * (cutoff - d) / (cutoff * cutoff);
+        a.fx -= f * nx;  a.fy -= f * ny;
+        b.fx += f * nx;  b.fy += f * ny;
+      }
+
+      // Semantic mode: pairs with no attraction edge push apart at longer range,
+      // separating unrelated clusters. Force is zero at dist, grows inward.
+      if (semanticMode && semanticConnected.size > 0) {
+        const key = a.word < b.word ? `${a.word}\x00${b.word}` : `${b.word}\x00${a.word}`;
+        if (!semanticConnected.has(key)) {
+          const dist = 200;
+          if (d < dist) {
+            const f = SIM.springK * SIM.semanticStrength * (d - dist);
+            a.fx += f * nx;  a.fy += f * ny;
+            b.fx -= f * nx;  b.fy -= f * ny;
+          }
+        }
       }
     }
   }
@@ -872,8 +927,9 @@ function applyForces() {
       n1.fx += f * nx;  n1.fy += f * ny;
       n2.fx -= f * nx;  n2.fy -= f * ny;
     } else {
-      // Person spring
-      const f = SIM.springK * (d - rest);
+      // Person spring — 1.5× strength when either word is unique to one person
+      const k = SIM.springK * (s.unique ? 1.5 : 1.0);
+      const f = k * (d - rest);
       n1.fx += f * nx;  n1.fy += f * ny;
       n2.fx -= f * nx;  n2.fy -= f * ny;
     }
@@ -943,7 +999,7 @@ function render() {
     ctx.moveTo(s.n1.x, s.n1.y);
     ctx.lineTo(s.n2.x, s.n2.y);
     if (s.semantic) {
-      // Gradient from one word's color to the other — shows cross-person semantic bridges
+      // Synonym/similar: gradient from one word's color to the other
       const g = ctx.createLinearGradient(s.n1.x, s.n1.y, s.n2.x, s.n2.y);
       const alpha = Math.round(40 + s.sim * 60).toString(16).padStart(2, '0');
       g.addColorStop(0, s.n1.color + alpha);
@@ -1051,16 +1107,18 @@ function renderLegend() {
 // high liveliness shakes them out of bad local minima.
 // 30 s @ 60 fps = 1800 steps.
 function presimulate(steps) {
-  const savedScale      = SIM.sizeScale;
-  const savedJitter     = SIM.jitter;
-  const savedSemStr     = SIM.semanticStrength;
-  const savedSemZeroRep = SIM.semanticZeroRep;
-  SIM.sizeScale         = 0.4;
-  SIM.jitter            = 0.3;
-  SIM.damping           = 0.995 - 10 * 0.00195;  // 10% settling speed
-  SIM.centerG           = 0.0002;
-  SIM.semanticStrength  = 30;
-  SIM.semanticZeroRep   = 600;
+  const savedScale  = SIM.sizeScale;
+  const savedJitter = SIM.jitter;
+  const savedSemStr = SIM.semanticStrength;
+  const savedRep    = SIM.repulsion;
+  const savedSpringK = SIM.springK;
+  SIM.sizeScale        = 0.4;
+  SIM.jitter           = 0.3;
+  SIM.damping          = 0.995 - 10 * 0.00195;  // 10% settling speed
+  SIM.centerG          = 0.0002;
+  SIM.semanticStrength = 30;
+  SIM.repulsion        = 900;
+  SIM.springK          = 0.002;
   applySizeScale();
   for (let i = 0; i < steps; i++) {
     applyForces();
@@ -1069,7 +1127,8 @@ function presimulate(steps) {
   SIM.sizeScale        = savedScale;
   SIM.jitter           = savedJitter;
   SIM.semanticStrength = savedSemStr;
-  SIM.semanticZeroRep  = savedSemZeroRep;
+  SIM.repulsion        = savedRep;
+  SIM.springK          = savedSpringK;
   SIM.damping          = 0.995 - 100 * 0.00195; // 100% settling speed = 0.80
   SIM.centerG          = 0.0006;
   applySizeScale();
@@ -1103,7 +1162,7 @@ function generate() {
 }
 
 function clearAll() {
-  people = []; nodes = []; springs = []; personSprings = []; semanticSprings = [];
+  people = []; nodes = []; springs = []; personSprings = []; semanticSprings = []; semanticConnected = new Set();
   obstacleRects = [];
   semanticMode = false; semanticCached = false; semanticLoading = false;
   if (raf) { cancelAnimationFrame(raf); raf = null; }
@@ -1165,8 +1224,8 @@ async function fetchEmbeddingSprings() {
 
   try {
     const edges = await buildEmbeddingLinks(words, {
-      K:            settings.similarityK,
-      threshold:    settings.similarityThreshold,
+      K:               settings.similarityK,
+      threshold:       settings.similarityThreshold,
       symmetric:       settings.symmetric,
       onesidedPenalty: settings.onesidedPenalty,
       baseDistance:    200,
@@ -1181,13 +1240,21 @@ async function fetchEmbeddingSprings() {
       const n2 = wordToNode.get(target);
       return {
         n1, n2,
-        sim:       weight,    // cosine similarity (already penalised for onesided edges)
-        isSynonym: false,     // USE doesn't tag synonyms; synonymBoost slider has no effect
-        onesided:  onesided,  // true = fallback edge for an isolated niche word
-        semantic:  true,
-        rest: Math.max(n1.r + n2.r + 28, 70),
+        sim: weight,
+        onesided,
+        semantic: true,
+        rest: Math.max(n1.r + n2.r + 10, 55),
       };
     });
+
+    // Build connected-pair lookup so applyForces can push unrelated pairs apart
+    semanticConnected = new Set();
+    for (const s of semanticSprings) {
+      const key = s.n1.word < s.n2.word
+        ? `${s.n1.word}\x00${s.n2.word}`
+        : `${s.n2.word}\x00${s.n1.word}`;
+      semanticConnected.add(key);
+    }
   } catch (err) {
     console.error('[Embeddings] Failed to build springs:', err);
     semanticSprings = [];
@@ -1283,7 +1350,7 @@ bindSlider('sl-size',    'val-size',    v => v.toFixed(2) + '×',  v => { SIM.si
 bindSlider('sl-maxfont', 'val-maxfont', v => v.toFixed(0) + 'px', v => { SIM.maxFont      = v; if (nodes.length) applySizeExponent(); });
 bindSlider('sl-sizeexp', 'val-sizeexp', v => v.toFixed(2),         v => { SIM.sizeExponent = v; if (nodes.length) applySizeExponent(); });
 // Semantic-only sliders — purple fill colour
-bindSlider('sl-sem-strength', 'val-sem-strength', v => v.toFixed(1) + '×', v => { SIM.semanticStrength = v; }, 'var(--sem)');
+bindSlider('sl-sem-strength',  'val-sem-strength',  v => v.toFixed(1) + '×', v => { SIM.semanticStrength = v; }, 'var(--sem)');
 // Embeddings-only sliders — resetting the spring cache triggers a rebuild on next toggle
 bindSlider('sl-onesided',      'val-onesided',      v => v.toFixed(2) + '×', v => { settings.onesidedPenalty    = v; semanticCached = false; semanticSprings = []; }, 'var(--sem)');
 bindSlider('sl-sim-k',         'val-sim-k',         v => Math.round(v),      v => { settings.similarityK        = Math.round(v); semanticCached = false; semanticSprings = []; }, 'var(--sem)');
@@ -1292,6 +1359,8 @@ bindSlider('sl-sim-threshold', 'val-sim-threshold', v => v.toFixed(2),       v =
 // ══════════════════════════════════════════════════
 //  MOUSE / TOUCH
 // ══════════════════════════════════════════════════
+const tooltipEl = document.getElementById('tooltip');
+
 function cssCoords(cx, cy) {
   const r = canvas.getBoundingClientRect();
   return { x: cx - r.left, y: cy - r.top };
@@ -1304,18 +1373,46 @@ function hitNode(x, y) {
   return null;
 }
 
+function showTooltip(node, x, y) {
+  const rows = node.owners.map(p =>
+    `<div class="tip-row"><div class="tip-dot" style="background:${p.color}"></div><span>${esc(p.name)}</span></div>`
+  ).join('');
+  tooltipEl.innerHTML = `<div class="tip-label">Described by</div>${rows}`;
+  tooltipEl.classList.add('show');
+  // Position offset from cursor, flip left/up if near canvas edge
+  const PAD = 16;
+  let tx = x + PAD, ty = y + PAD;
+  // Measure after setting content so offsetWidth is accurate
+  requestAnimationFrame(() => {
+    if (tx + tooltipEl.offsetWidth  > cw) tx = x - PAD - tooltipEl.offsetWidth;
+    if (ty + tooltipEl.offsetHeight > ch) ty = y - PAD - tooltipEl.offsetHeight;
+    tooltipEl.style.left = tx + 'px';
+    tooltipEl.style.top  = ty + 'px';
+  });
+  tooltipEl.style.left = tx + 'px';
+  tooltipEl.style.top  = ty + 'px';
+}
+
+function hideTooltip() {
+  tooltipEl.classList.remove('show');
+}
+
 canvas.addEventListener('mousedown', e => {
   const { x, y } = cssCoords(e.clientX, e.clientY);
   const hit = hitNode(x, y);
-  if (hit) { dragging = hit; mx = x; my = y; canvas.style.cursor = 'grabbing'; }
+  if (hit) { dragging = hit; mx = x; my = y; canvas.style.cursor = 'grabbing'; hideTooltip(); }
 });
 canvas.addEventListener('mousemove', e => {
   const { x, y } = cssCoords(e.clientX, e.clientY);
   mx = x; my = y;
-  if (!dragging) canvas.style.cursor = hitNode(x, y) ? 'grab' : 'default';
+  if (dragging) return;
+  const hit = hitNode(x, y);
+  canvas.style.cursor = hit ? 'grab' : 'default';
+  if (hit) showTooltip(hit, x, y);
+  else     hideTooltip();
 });
 canvas.addEventListener('mouseup',    () => { dragging = null; canvas.style.cursor = 'default'; });
-canvas.addEventListener('mouseleave', () => { dragging = null; });
+canvas.addEventListener('mouseleave', () => { dragging = null; hideTooltip(); });
 
 canvas.addEventListener('touchstart', e => {
   const { x, y } = cssCoords(e.touches[0].clientX, e.touches[0].clientY);
@@ -1355,6 +1452,7 @@ btnAdd.addEventListener('click',   addPerson);
 btnGen.addEventListener('click',   generate);
 btnPause.addEventListener('click', togglePause);
 btnClr.addEventListener('click',   clearAll);
+document.getElementById('btn-remove-all').addEventListener('click', clearAll);
 chkSemantic.addEventListener('change', () => {
   if (semanticLoading) { chkSemantic.checked = !chkSemantic.checked; return; } // debounce
   setSemanticMode(chkSemantic.checked);
