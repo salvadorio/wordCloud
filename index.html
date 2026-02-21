@@ -250,6 +250,34 @@
     .p-name { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .p-words { font-size: 0.68rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
     .empty-note { font-size: 0.76rem; color: var(--muted); text-align: center; padding: 14px 0; }
+    .hover-hint { font-size: 0.65rem; color: var(--muted); text-align: center; padding: 6px 0 2px; opacity: 0.7; }
+
+    /* Person shared-words hover panel */
+    #person-tip {
+      position: fixed;
+      left: 312px;
+      top: 0;
+      max-height: 70vh;
+      overflow-y: auto;
+      width: 220px;
+      background: rgba(9,9,18,0.92);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      padding: 10px 13px;
+      font-size: 0.72rem;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 50;
+    }
+    #person-tip.show { opacity: 1; }
+    .ptip-title { font-weight: 600; margin-bottom: 7px; color: var(--text); }
+    .ptip-none  { color: var(--muted); font-style: italic; }
+    .ptip-word  { margin-bottom: 5px; }
+    .ptip-word-label { font-weight: 600; color: var(--text); }
+    .ptip-others { color: var(--muted); margin-top: 1px; display: flex; flex-wrap: wrap; gap: 3px; }
+    .ptip-owner { display: inline-flex; align-items: center; gap: 3px; }
+    .ptip-dot   { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 
     /* ── FOOTER ────────────────────────────────── */
     .side-footer {
@@ -343,6 +371,62 @@
       opacity: 0; transition: opacity 0.4s;
     }
     #hint.show { opacity: 1; }
+
+    #tf-credit {
+      position: absolute;
+      bottom: 16px; right: 16px;
+      color: rgba(255,255,255,0.22);
+      font-size: 0.6rem;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    #bulk-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    #bulk-overlay.show { display: flex; }
+    #bulk-modal {
+      background: #13131f;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 20px;
+      width: 420px;
+      max-width: 90vw;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    #bulk-title { font-weight: 600; font-size: 0.9rem; }
+    #bulk-hint  { font-size: 0.68rem; color: var(--muted); }
+    #bulk-hint code { background: rgba(255,255,255,0.07); padding: 1px 5px; border-radius: 4px; font-family: monospace; }
+    #bulk-ta {
+      width: 100%; height: 160px;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 7px; color: var(--text);
+      font-family: inherit; font-size: 0.78rem;
+      padding: 8px 10px; resize: vertical; box-sizing: border-box;
+    }
+    #bulk-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    #bulk-cancel { padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-family: inherit; cursor: pointer; font-size: 0.8rem; }
+    #bulk-add    { padding: 7px 14px; border-radius: 7px; border: none; background: var(--accent); color: #fff; font-family: inherit; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+
+    #btn-secret {
+      position: absolute;
+      bottom: 14px; left: 14px;
+      padding: 5px 12px;
+      background: rgba(9,9,18,0.75);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      color: rgba(255,255,255,0.45);
+      font-size: 0.65rem;
+      font-family: inherit;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+    }
+    #btn-secret:hover { border-color: rgba(255,255,255,0.25); color: rgba(255,255,255,0.8); }
 
     /* Paused overlay badge */
     #paused-badge {
@@ -455,6 +539,9 @@
 </head>
 <body>
 
+<!-- Shared-words hover panel (appears to right of sidebar on person card hover) -->
+<div id="person-tip"></div>
+
 <!-- ── SIDEBAR ──────────────────────────────────── -->
 <div id="sidebar">
   <div class="side-header">
@@ -493,6 +580,7 @@
         <div class="sec-label">People <span id="p-count" style="color:#2c2c44"></span></div>
         <button class="btn btn-ghost" id="btn-remove-all">Remove all</button>
       </div>
+      <p class="hover-hint">Hover over a person to see shared words</p>
       <div id="p-list"><p class="empty-note">No people added yet.</p></div>
     </div>
   </div>
@@ -655,6 +743,22 @@
   <div id="semantic-badge">Fetching semantic data…</div>
   <div id="hint">Drag words to rearrange · shared words appear white</div>
   <div id="tooltip"></div>
+  <div id="tf-credit">Semantic similarity powered by TensorFlow.js</div>
+  <button id="btn-secret">Mass Add</button>
+
+  <!-- Bulk-paste modal -->
+  <div id="bulk-overlay">
+    <div id="bulk-modal">
+      <div id="bulk-title">Paste people &amp; words</div>
+      <div id="bulk-hint">One person per line: <code>Name: word1, word2, word3</code></div>
+      <textarea id="bulk-ta" placeholder="Father: witty, curious, creative…
+Joey: nerd, guitar, cool…"></textarea>
+      <div id="bulk-actions">
+        <button id="bulk-cancel">Cancel</button>
+        <button id="bulk-add">Add people</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -663,11 +767,15 @@
 // ══════════════════════════════════════════════════
 //  PALETTE
 // ══════════════════════════════════════════════════
-const PALETTE = [
-  '#ff6b6b','#ffa94d','#ffe066','#69db7c','#4dabf7',
-  '#cc5de8','#f783ac','#38d9a9','#a9e34b','#ff8787',
-  '#74c0fc','#e599f7','#ffec99','#b2f2bb','#a5d8ff',
-];
+// Golden-ratio hue stepping — colors never repeat and stay maximally spread
+function paletteColor(index) {
+  const hue = (index * 137.508) % 360;
+  return `hsl(${hue.toFixed(1)},70%,65%)`;
+}
+// Add alpha to an hsl() color string → hsla()
+function withAlpha(hsl, a) {
+  return hsl.replace('hsl(', 'hsla(').replace(')', `,${a})`);
+}
 
 // ══════════════════════════════════════════════════
 //  SIMULATION PARAMETERS  (mutated by sliders live)
@@ -783,8 +891,9 @@ function applySizeScale() {
     n.tw       = n.baseTw * s;
   }
   // Update rest lengths for both spring sets (sizes may have changed)
-  for (const sp of personSprings)   { sp.rest = Math.max(sp.n1.r + sp.n2.r + 10, 55); }
-  for (const sp of semanticSprings) { sp.rest = Math.max(sp.n1.r + sp.n2.r + 10, 55); }
+  const gap = 10 + SIM.repulsion * 0.05;
+  for (const sp of personSprings)   { sp.rest = Math.max(sp.n1.r + sp.n2.r + gap, 55); }
+  for (const sp of semanticSprings) { sp.rest = Math.max(sp.n1.r + sp.n2.r + gap, 55); }
 }
 
 // Recompute base font sizes from raw counts + current SIM params, re-measure, re-scale.
@@ -843,7 +952,7 @@ function buildSim() {
         const na = pNodes[a], nb = pNodes[b];
         // unique: either word belongs to only this person → boost spring to keep it grouped
         const unique = na.owners.length === 1 || nb.owners.length === 1;
-        personSprings.push({ n1: na, n2: nb, color: p.color, rest: Math.max(na.r + nb.r + 10, 55), unique });
+        personSprings.push({ n1: na, n2: nb, color: p.color, rest: Math.max(na.r + nb.r + 10 + SIM.repulsion * 0.05, 55), unique });
       }
     }
   }
@@ -893,7 +1002,7 @@ function applyForces() {
       // vertical clearance based on cap height, smoothly interpolated between.
       const ra = (a.hw * a.hh) / Math.sqrt(a.hh * a.hh * nx * nx + a.hw * a.hw * ny * ny);
       const rb = (b.hw * b.hh) / Math.sqrt(b.hh * b.hh * nx * nx + b.hw * b.hw * ny * ny);
-      const cutoff = ra + rb + 10;
+      const cutoff = ra + rb + 10 + SIM.repulsion * 0.05;
       if (d < cutoff) {
         const f = SIM.repulsion * (cutoff - d) / (cutoff * cutoff);
         a.fx -= f * nx;  a.fy -= f * ny;
@@ -1002,13 +1111,13 @@ function render() {
     if (s.semantic) {
       // Synonym/similar: gradient from one word's color to the other
       const g = ctx.createLinearGradient(s.n1.x, s.n1.y, s.n2.x, s.n2.y);
-      const alpha = Math.round(40 + s.sim * 60).toString(16).padStart(2, '0');
-      g.addColorStop(0, s.n1.color + alpha);
-      g.addColorStop(1, s.n2.color + alpha);
+      const alpha = (40 + s.sim * 60) / 255;
+      g.addColorStop(0, withAlpha(s.n1.color, alpha.toFixed(2)));
+      g.addColorStop(1, withAlpha(s.n2.color, alpha.toFixed(2)));
       ctx.strokeStyle = g;
       ctx.lineWidth   = 0.8 + s.sim * 1.6;
     } else {
-      ctx.strokeStyle = s.color + '28';
+      ctx.strokeStyle = withAlpha(s.color, 0.16);
       ctx.lineWidth   = 1.2;
     }
     ctx.stroke();
@@ -1065,7 +1174,7 @@ function addPerson() {
   if (!raw) { inpWords.focus(); return; }
   const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
   if (!words.length) return;
-  people.push({ id: nextId++, name, words, color: PALETTE[people.length % PALETTE.length] });
+  people.push({ id: nextId++, name, words, color: paletteColor(people.length) });
   inpName.value = ''; inpWords.value = '';
   inpName.focus();
   renderList();
@@ -1076,10 +1185,45 @@ window.removePerson = removePerson;
 
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+const personTip = document.getElementById('person-tip');
+
+function showPersonTip(person, cardEl) {
+  // Find nodes owned by this person that are also owned by someone else
+  const shared = nodes.filter(n =>
+    n.owners.some(o => o.id === person.id) && n.owners.length > 1
+  );
+
+  const rect = cardEl.getBoundingClientRect();
+  personTip.style.top = Math.min(rect.top, window.innerHeight - 300) + 'px';
+
+  if (!shared.length) {
+    personTip.innerHTML = `
+      <div class="ptip-title">Shared with others</div>
+      <div class="ptip-none">No words in common</div>`;
+  } else {
+    const rows = shared.map(n => {
+      const others = n.owners.filter(o => o.id !== person.id);
+      const dots   = others.map(o =>
+        `<span class="ptip-owner"><span class="ptip-dot" style="background:${o.color}"></span>${esc(o.name)}</span>`
+      ).join('');
+      return `<div class="ptip-word">
+        <div class="ptip-word-label">${esc(n.word)}</div>
+        <div class="ptip-others">${dots}</div>
+      </div>`;
+    }).join('');
+    personTip.innerHTML = `<div class="ptip-title">Shared with others</div>${rows}`;
+  }
+  personTip.classList.add('show');
+}
+
+function hidePersonTip() {
+  personTip.classList.remove('show');
+}
+
 function renderList() {
   pCount.textContent = people.length ? `(${people.length})` : '';
   pList.innerHTML = people.length ? people.map(p => `
-    <div class="person-card">
+    <div class="person-card" data-pid="${p.id}">
       <div class="p-dot" style="background:${p.color}"></div>
       <div class="p-info">
         <div class="p-name">${esc(p.name)}</div>
@@ -1088,6 +1232,15 @@ function renderList() {
       <button class="btn btn-ghost" onclick="removePerson(${p.id})">✕</button>
     </div>`).join('')
     : '<p class="empty-note">No people added yet.</p>';
+
+  // Wire hover events after innerHTML is set
+  pList.querySelectorAll('.person-card[data-pid]').forEach(card => {
+    const pid    = parseInt(card.dataset.pid);
+    const person = people.find(p => p.id === pid);
+    if (!person) return;
+    card.addEventListener('mouseenter', () => { if (nodes.length) showPersonTip(person, card); });
+    card.addEventListener('mouseleave', hidePersonTip);
+  });
 }
 
 function renderLegend() {
@@ -1244,7 +1397,7 @@ async function fetchEmbeddingSprings() {
         sim: weight,
         onesided,
         semantic: true,
-        rest: Math.max(n1.r + n2.r + 10, 55),
+        rest: Math.max(n1.r + n2.r + 10 + SIM.repulsion * 0.05, 55),
       };
     });
 
@@ -1342,7 +1495,7 @@ function bindSlider(sliderId, valId, format, onChange, colour) {
 }
 
 bindSlider('sl-spring',  'val-spring',  v => v.toFixed(5),                  v => { SIM.springK = v; });
-bindSlider('sl-rep',     'val-rep',     v => Math.round(v).toLocaleString(), v => { SIM.repulsion = v; });
+bindSlider('sl-rep',     'val-rep',     v => Math.round(v).toLocaleString(), v => { SIM.repulsion = v; if (nodes.length) applySizeScale(); });
 // Damping is inverted: slider 0=jittery (coeff 0.995), slider 100=calm (coeff 0.80)
 bindSlider('sl-damp',    'val-damp',    v => Math.round(v) + '%',            v => { SIM.damping = 0.995 - v * 0.00195; });
 bindSlider('sl-jitter',  'val-jitter',  v => v.toFixed(3),                   v => { SIM.jitter = v; });
@@ -1451,6 +1604,48 @@ window.addEventListener('resize', () => {
 // ══════════════════════════════════════════════════
 btnAdd.addEventListener('click',   addPerson);
 btnGen.addEventListener('click',   generate);
+
+const bulkOverlay = document.getElementById('bulk-overlay');
+const bulkTa      = document.getElementById('bulk-ta');
+
+function parseBulkText(text) {
+  const result = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(':');
+    if (colon === -1) continue;
+    const name  = trimmed.slice(0, colon).trim();
+    const words = trimmed.slice(colon + 1).split(',').map(w => w.trim().toLowerCase()).filter(w => w);
+    if (name && words.length) result.push({ name, words });
+  }
+  return result;
+}
+
+document.getElementById('btn-secret').addEventListener('click', () => {
+  bulkOverlay.classList.add('show');
+  bulkTa.focus();
+});
+
+document.getElementById('bulk-cancel').addEventListener('click', () => {
+  bulkOverlay.classList.remove('show');
+});
+
+document.getElementById('bulk-add').addEventListener('click', () => {
+  const parsed = parseBulkText(bulkTa.value);
+  if (!parsed.length) return;
+  for (const d of parsed) {
+    people.push({ id: nextId++, name: d.name, words: d.words, color: paletteColor(people.length) });
+  }
+  renderList();
+  generate();
+  bulkTa.value = '';
+  bulkOverlay.classList.remove('show');
+});
+
+bulkOverlay.addEventListener('click', e => {
+  if (e.target === bulkOverlay) bulkOverlay.classList.remove('show');
+});
 btnPause.addEventListener('click', togglePause);
 btnClr.addEventListener('click',   clearAll);
 document.getElementById('btn-remove-all').addEventListener('click', clearAll);
@@ -1494,7 +1689,7 @@ loadEmbeddingModel()
     { name: 'Shreya',  words: ['interesting', 'funny', 'smart', 'odd', 'nonchalant sometimes', 'advice', 'brainrot', 'dnd', '7up'] },
   ];
   for (const d of demo) {
-    people.push({ id: nextId++, name: d.name, words: d.words, color: PALETTE[people.length % PALETTE.length] });
+    people.push({ id: nextId++, name: d.name, words: d.words, color: paletteColor(people.length) });
   }
   renderList();
   generate();
