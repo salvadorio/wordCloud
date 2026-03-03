@@ -272,12 +272,14 @@
     }
     #person-tip.show { opacity: 1; }
     .ptip-title { font-weight: 600; margin-bottom: 7px; color: var(--text); }
+    .ptip-title + .ptip-title { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
     .ptip-none  { color: var(--muted); font-style: italic; }
     .ptip-word  { margin-bottom: 5px; }
     .ptip-word-label { font-weight: 600; color: var(--text); }
     .ptip-others { color: var(--muted); margin-top: 1px; display: flex; flex-wrap: wrap; gap: 3px; }
     .ptip-owner { display: inline-flex; align-items: center; gap: 3px; }
     .ptip-dot   { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+    .ptip-sim   { color: var(--muted); font-size: 0.62rem; margin-left: 3px; }
 
     /* ── FOOTER ────────────────────────────────── */
     .side-footer {
@@ -741,7 +743,7 @@
   <div id="legend"></div>
   <div id="paused-badge">⏸ Paused</div>
   <div id="semantic-badge">Fetching semantic data…</div>
-  <div id="hint">Drag words to rearrange · shared words appear white</div>
+  <div id="hint">Drag to rearrange · hover + X to delete · shared words appear white</div>
   <div id="tooltip"></div>
   <div id="tf-credit">Semantic similarity powered by TensorFlow.js</div>
   <button id="btn-secret">Mass Add</button>
@@ -821,7 +823,8 @@ let semanticMode    = false; // true = use semanticSprings
 let semanticCached  = false; // true = semanticSprings is valid for current node set
 let semanticLoading = false;
 let embeddingModelReady = false; // true after loadEmbeddingModel() resolves
-let dragging = null;
+let dragging    = null;
+let hoveredNode = null;
 let mx = 0, my = 0;
 let raf      = null;
 let paused   = false;
@@ -1188,20 +1191,18 @@ function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 const personTip = document.getElementById('person-tip');
 
 function showPersonTip(person, cardEl) {
-  // Find nodes owned by this person that are also owned by someone else
+  const rect = cardEl.getBoundingClientRect();
+  personTip.style.top = Math.min(rect.top, window.innerHeight - 360) + 'px';
+
+  // ── Section 1: words shared verbatim with other people ──
   const shared = nodes.filter(n =>
     n.owners.some(o => o.id === person.id) && n.owners.length > 1
   );
-
-  const rect = cardEl.getBoundingClientRect();
-  personTip.style.top = Math.min(rect.top, window.innerHeight - 300) + 'px';
-
+  let html = '<div class="ptip-title">Shared with others</div>';
   if (!shared.length) {
-    personTip.innerHTML = `
-      <div class="ptip-title">Shared with others</div>
-      <div class="ptip-none">No words in common</div>`;
+    html += '<div class="ptip-none">No words in common</div>';
   } else {
-    const rows = shared.map(n => {
+    html += shared.map(n => {
       const others = n.owners.filter(o => o.id !== person.id);
       const dots   = others.map(o =>
         `<span class="ptip-owner"><span class="ptip-dot" style="background:${o.color}"></span>${esc(o.name)}</span>`
@@ -1211,8 +1212,36 @@ function showPersonTip(person, cardEl) {
         <div class="ptip-others">${dots}</div>
       </div>`;
     }).join('');
-    personTip.innerHTML = `<div class="ptip-title">Shared with others</div>${rows}`;
   }
+
+  // ── Section 2: semantic matches (only in semantic mode) ──
+  if (semanticSprings.length) {
+    const matches = [];
+    for (const s of semanticSprings) {
+      const n1mine = s.n1.owners.some(o => o.id === person.id);
+      const n2mine = s.n2.owners.some(o => o.id === person.id);
+      if (n1mine && !n2mine) matches.push({ mine: s.n1, other: s.n2, sim: s.sim });
+      else if (n2mine && !n1mine) matches.push({ mine: s.n2, other: s.n1, sim: s.sim });
+    }
+    matches.sort((a, b) => b.sim - a.sim);
+
+    html += '<div class="ptip-title">Close matches</div>';
+    if (!matches.length) {
+      html += '<div class="ptip-none">No semantic matches</div>';
+    } else {
+      html += matches.slice(0, 8).map(m => {
+        const dots = m.other.owners.map(o =>
+          `<span class="ptip-owner"><span class="ptip-dot" style="background:${o.color}"></span>${esc(o.name)}</span>`
+        ).join('');
+        return `<div class="ptip-word">
+          <div class="ptip-word-label">${esc(m.mine.word)} <span style="color:var(--muted);font-weight:400">→</span> ${esc(m.other.word)}<span class="ptip-sim">${(m.sim * 100).toFixed(0)}%</span></div>
+          <div class="ptip-others">${dots}</div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  personTip.innerHTML = html;
   personTip.classList.add('show');
 }
 
@@ -1561,12 +1590,13 @@ canvas.addEventListener('mousemove', e => {
   mx = x; my = y;
   if (dragging) return;
   const hit = hitNode(x, y);
+  hoveredNode = hit || null;
   canvas.style.cursor = hit ? 'grab' : 'default';
   if (hit) showTooltip(hit, x, y);
   else     hideTooltip();
 });
 canvas.addEventListener('mouseup',    () => { dragging = null; canvas.style.cursor = 'default'; });
-canvas.addEventListener('mouseleave', () => { dragging = null; hideTooltip(); });
+canvas.addEventListener('mouseleave', () => { dragging = null; hoveredNode = null; hideTooltip(); });
 
 canvas.addEventListener('touchstart', e => {
   const { x, y } = cssCoords(e.touches[0].clientX, e.touches[0].clientY);
@@ -1583,9 +1613,28 @@ canvas.addEventListener('touchend', () => { dragging = null; });
 // ══════════════════════════════════════════════════
 //  KEYBOARD
 // ══════════════════════════════════════════════════
+function deleteNode(n) {
+  nodes           = nodes.filter(nd => nd !== n);
+  personSprings   = personSprings.filter(s => s.n1 !== n && s.n2 !== n);
+  semanticSprings = semanticSprings.filter(s => s.n1 !== n && s.n2 !== n);
+  semanticConnected = new Set([...semanticConnected].filter(key => {
+    const [a, b] = key.split('\x00');
+    return a !== n.word && b !== n.word;
+  }));
+  springs = semanticMode ? semanticSprings : personSprings;
+  // Remove the word from each person's list so it stays gone on regenerate
+  for (const p of people) p.words = p.words.filter(w => w.toLowerCase() !== n.word);
+  renderList();
+  hoveredNode = null;
+  hideTooltip();
+}
+
 inpName.addEventListener('keydown',  e => { if (e.key === 'Enter') { e.preventDefault(); inpWords.focus(); } });
 inpWords.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addPerson(); } });
-document.addEventListener('keydown', e => { if (e.key === ' ' && e.target === document.body) { e.preventDefault(); if (raf) togglePause(); } });
+document.addEventListener('keydown', e => {
+  if (e.key === ' ' && e.target === document.body) { e.preventDefault(); if (raf) togglePause(); }
+  if ((e.key === 'x' || e.key === 'X') && hoveredNode && e.target === document.body) deleteNode(hoveredNode);
+});
 
 // ══════════════════════════════════════════════════
 //  RESIZE
@@ -1678,15 +1727,25 @@ loadEmbeddingModel()
 
 (function seedDemo() {
   const demo = [
-    { name: 'Katie',   words: ['intelligent', 'clever', 'resourceful', 'skeptical', 'stubborn', 'enthusiast', 'curious', 'efficient', 'creative', 'social'] },
-    { name: 'Sam',     words: ['free-spirited', 'knowledgable', 'honest', 'creative', 'booksmart', 'energetic', 'silly', 'blunt', 'articulate', 'whimsical'] },
-    { name: 'Caden',   words: ['eccentric', 'stubborn', 'mixed', 'funny', 'woke', 'uncultured', 'insecure', 'creative', 'focused'] },
-    { name: 'Nathan',  words: ['creative', 'intelligent', 'curious', 'thoughtful', 'musical', 'humorous', 'resourceful', 'relaxed', 'polite', 'real'] },
-    { name: 'Phillip', words: ['calm', 'reserved', 'focused', 'consistent', 'fashionable', 'jackets', 'boots', 'conan gray', 'bay area', 'dark horse'] },
-    { name: 'Misha',   words: ['creative', 'unique', 'independent', 'friend', 'multifaceted', 'charismatic', 'humorous', 'inventive', 'active', 'guitar'] },
-    { name: 'Rebecca', words: ['stubborn', 'opinionated', 'eloquent', 'loyal', 'introspective', 'confident', 'creative', 'innovative'] },
-    { name: 'Tim',     words: ['mixed', 'asian', 'latissimus dorsi', 'guitar', 'short', 'funny', 'strong', 'vietnam', 'fremont', 'friend'] },
-    { name: 'Shreya',  words: ['interesting', 'funny', 'smart', 'odd', 'nonchalant sometimes', 'advice', 'brainrot', 'dnd', '7up'] },
+    { name: 'Katie',          words: ['intelligent', 'clever', 'resourceful', 'skeptical', 'hot', 'stubborn', 'enthusiast', 'curious', 'efficient', 'creative', 'social'] },
+    { name: 'Sam',            words: ['free-spirited', 'knowledgable', 'honest', 'creative', 'booksmart', 'energetic', 'silly', 'blunt', 'articulate', 'whimsical', 'narcissistic'] },
+    { name: 'Caden',          words: ['eccentric', 'stubborn', 'mixed', 'funny', 'woke', 'uncultured', 'creative', 'focused'] },
+    { name: 'Nathan',         words: ['creative', 'intelligent', 'curious', 'thoughtful', 'musical', 'humorous', 'resourceful', 'relaxed', 'polite', 'real'] },
+    { name: 'Phillip',        words: ['calm', 'reserved', 'focused', 'consistent', 'fashionable', 'jackets', 'boots', 'Conan Gray', 'Bay Area', 'Dark Horse'] },
+    { name: 'Misha',          words: ['creative', 'unique', 'independent', 'friend', 'multifaceted', 'charismatic', 'humorous', 'inventive', 'active', 'guitar'] },
+    { name: 'Rebecca',        words: ['stubborn', 'opinionated', 'eloquent', 'loyal', 'introspective', 'confident', 'creative', 'innovative'] },
+    { name: 'Tim',            words: ['mixed', 'asian', 'latissimus dorsi', 'guitar', 'short', 'funny', 'strong', 'Vietnam', 'Fremont', 'friend'] },
+    { name: 'Shreya',         words: ['interesting', 'funny', 'smart', 'odd', 'nonchalant sometimes', 'advice', 'brainrot', '7up'] },
+    { name: 'Zhao',           words: ['chill', 'curious', 'fun', 'skilled', 'eclectic', 'curated'] },
+    { name: 'Leah',           words: ['weird', 'talented', 'diva', 'sparkly', 'cool', 'dope'] },
+    { name: 'Justin',         words: ['direct', 'honest', 'trustworthy', 'artistic', 'musician', 'student', 'funny', 'racially ambiguous'] },
+    { name: 'Mom',            words: ['independent', 'maker', 'thinker', 'creative', 'curious', 'insightful', 'idea explorer', 'challenger', 'quick witted', 'funny'] },
+    { name: 'Lamar',          words: ['laid-back', 'visionist', 'organized', 'goofy', 'boy', 'air', 'play', 'green', 'cardboard', 'art'] },
+    { name: 'Dad',            words: ['witty', 'curious', 'open-minded', 'creative', 'analytical', 'critical', 'intuitive', 'musical', 'pensive', 'observant'] },
+    { name: 'Joey',           words: ['nerd', 'geek', 'chinese', 'mexican', 'korean', 'considerate', 'unpredictable', 'cool', 'guitar', 'dominic fike'] },
+    { name: 'Juniper',        words: ['creative', 'relaxed', 'humorous', 'blunt', 'innovative', 'explorative', 'casual', 'earnest', 'candid', 'versatile'] },
+    { name: 'Shereen',        words: ['pensive', 'articulate', 'inconsistent', 'artsy', 'polymath', 'inquisitive', 'mischievous', 'attentive', 'snoopy', 'generous'] },
+    { name: 'Teacher Joanne', words: ['maverick', 'non-conformist', 'intuitive', 'ascetic', 'unconventional', 'complex', 'rebellious', 'gentle', 'musical', 'revolutionary'] },
   ];
   for (const d of demo) {
     people.push({ id: nextId++, name: d.name, words: d.words, color: paletteColor(people.length) });
